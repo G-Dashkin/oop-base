@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from uuid import uuid4
+from decimal import Decimal
 from src.exceptions import (
     AccountFrozenError, AccountClosedError,
     InvalidOperationError, InsufficientFundsError
@@ -22,7 +23,7 @@ class AbstractAccount(ABC):
     def __init__(self, owner: Owner, currency: str, account_id: str = None):
         self._id = account_id
         self._owner = owner
-        self._balance = 0.0
+        self._balance = Decimal("0.0")
         self._status = self.COUNT_STATUS[0]
         self._currency = currency
 
@@ -51,7 +52,8 @@ class BankAccount(AbstractAccount):
 
     @staticmethod
     def _validate_amount(summ):
-        if not isinstance(summ, (int, float)): raise InvalidOperationError("Сумма должна быть числом")
+        if isinstance(summ, bool): raise InvalidOperationError("Сумма должна быть числом")
+        if not isinstance(summ, (int, float, Decimal)): raise InvalidOperationError("Сумма должна быть числом")
         if summ <= 0: raise InvalidOperationError("Сумма должна быть положительной")
 
     def _check_status(self):
@@ -82,11 +84,19 @@ class BankAccount(AbstractAccount):
             "status": self._status,
         }
 
-    def active(self):
-        self._status = "active"
+    TRANSITIONS = {
+        "active": ("frozen", "closed"),
+        "frozen": ("active",),
+        "closed": (),  # из закрытого никуда
+    }
 
-    def freeze(self):
-        self._status = "frozen"
+    def _change_status(self, new_status):
+        allowed = self.TRANSITIONS.get(self._status, ())
+        if new_status not in allowed: raise InvalidOperationError(f"Нельзя перейти из '{self._status}' в '{new_status}'")
+        self._status = new_status
 
-    def close(self):
-        self._status = "closed"
+    def active(self): self._change_status("active")
+
+    def freeze(self): self._change_status("frozen")
+
+    def close(self): self._change_status("closed")

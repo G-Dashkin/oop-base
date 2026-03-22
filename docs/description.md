@@ -41,5 +41,5 @@ BankAccount(AbstractAccount)
 active ──freeze()──▶ frozen
 active ──close()───▶ closed
 frozen ──active()──▶ active
-closed ──active()──▶ active
+closed ──active()──▶ active # можно переоткрыть
 ```
