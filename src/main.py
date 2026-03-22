@@ -1,4 +1,5 @@
-from src.models import Owner, BankAccount
+from decimal import Decimal
+from src.models import Owner, BankAccount, SavingsAccount, PremiumAccount, InvestmentAccount
 from src.exceptions import (
     AccountFrozenError, AccountClosedError,
     InvalidOperationError, InsufficientFundsError
@@ -21,7 +22,7 @@ if __name__ == "__main__":
 
     # Снятие
     print(f"Снимаем 300.45 (метод .withdraw())")
-    account.withdraw(300.45)
+    account.withdraw(Decimal("300.45"))
     print(f"balance: {account._balance}")
 
     # Информация
@@ -62,7 +63,8 @@ if __name__ == "__main__":
 
     # Открытие
     print("Тестируем открытие счёта")
-    account.active()
+    try:account.active()
+    except InvalidOperationError as e: print(f"InvalidOperationError: {e}")
     print(f"Статус: {account._status}")
     print("Добавляем 100")
     try: account.deposit(100)
@@ -70,3 +72,52 @@ if __name__ == "__main__":
     print("---")
     print(account)
     print("--------------------------------------")
+
+    # --- SavingsAccount ---
+    print("\n=== SavingsAccount ===")
+    savings = SavingsAccount(owner, "RUB", min_balance=1000, monthly_rate=0.5)
+    savings.deposit(10000)
+    print(f"Баланс: {savings._balance}")
+
+    interest = savings.apply_monthly_interest()
+    print(f"Начислен процент: {interest}")
+    print(savings)
+
+    try: savings.withdraw(9500)
+    except InsufficientFundsError as e: print(f"InsufficientFundsError: {e}")
+
+    # --- PremiumAccount ---
+    print("\n=== PremiumAccount ===")
+    premium = PremiumAccount(owner, "USD", overdraft_limit=5000, withdraw_commission=50)
+    premium.deposit(1000)
+    premium.withdraw(500)  # 500 + 50 комиссия
+    print(f"После снятия 500 (+ 50 комиссия): {premium._balance}")
+
+    premium.withdraw(800)  # уходим в овердрафт
+    print(f"Овердрафт: {premium._balance}")
+    print(premium)
+
+    # --- InvestmentAccount ---
+    print("\n=== InvestmentAccount ===")
+    invest = InvestmentAccount(owner, "USD")
+    invest.deposit(20000)
+    invest.buy_asset("stocks", 8000)
+    invest.buy_asset("bonds", 5000)
+    invest.buy_asset("etf", 3000)
+    print(f"Свободный баланс: {invest._balance}")
+
+    projection = invest.project_yearly_growth()
+    print(f"Прогноз годовой доходности: {projection['total_growth']}")
+    for asset, data in projection["details"].items():
+        print(f"  {asset}: {data['amount']} × {data['rate']} = +{data['growth']}")
+
+    invest.sell_asset("bonds", 2000)
+    print(f"Продал bonds на 2000, баланс: {invest._balance}")
+    print(invest)
+
+    # --- Полиморфизм ---
+    print("\n=== Полиморфизм ===")
+    accounts = [account, savings, premium, invest]
+    for acc in accounts:
+        info = acc.get_account_info()
+        print(f"{type(acc).__name__}: balance={info['balance']}, status={info['status']}")
