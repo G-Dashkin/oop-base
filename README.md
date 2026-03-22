@@ -37,7 +37,7 @@ python -m src.main
 # Тесты
 python -m pytest tests/
 # или
-python -m unittest tests.test_bank
+python -m unittest tests.test_bank_account
 ```
 
 ## Классы
