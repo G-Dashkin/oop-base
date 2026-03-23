@@ -1,3 +1,6 @@
+import sys
+sys.tracebacklimit = 0
+
 from decimal import Decimal
 from src.models import Owner, BankAccount, SavingsAccount, PremiumAccount, InvestmentAccount
 from src.exceptions import (
@@ -22,7 +25,7 @@ if __name__ == "__main__":
 
     # Снятие
     print(f"Снимаем 300.45 (метод .withdraw())")
-    account.withdraw(Decimal("300.45"))
+    account.withdraw(300.45)
     print(f"balance: {account._balance}")
 
     # Информация
@@ -63,7 +66,7 @@ if __name__ == "__main__":
 
     # Открытие
     print("Тестируем открытие счёта")
-    try:account.active()
+    try: account.active()
     except InvalidOperationError as e: print(f"InvalidOperationError: {e}")
     print(f"Статус: {account._status}")
     print("Добавляем 100")
@@ -78,6 +81,10 @@ if __name__ == "__main__":
     savings = SavingsAccount(owner, "RUB", min_balance=1000, monthly_rate=0.5)
     savings.deposit(10000)
     print(f"Баланс: {savings._balance}")
+
+    # float работает корректно после фикса _to_decimal
+    savings.deposit(0.1)
+    print(f"Баланс после deposit(0.1): {savings._balance}")
 
     interest = savings.apply_monthly_interest()
     print(f"Начислен процент: {interest}")
@@ -96,6 +103,10 @@ if __name__ == "__main__":
     premium.withdraw(800)  # уходим в овердрафт
     print(f"Овердрафт: {premium._balance}")
     print(premium)
+
+    # Валидация конструктора
+    try: PremiumAccount(owner, "USD", withdraw_commission=-100)
+    except InvalidOperationError as e: print(f"Валидация конструктора: {e}")
 
     # --- InvestmentAccount ---
     print("\n=== InvestmentAccount ===")

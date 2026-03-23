@@ -1,4 +1,5 @@
 import unittest
+from decimal import Decimal
 from src.models import Owner, BankAccount
 from src.exceptions import (
     AccountFrozenError, AccountClosedError,
@@ -9,13 +10,12 @@ from src.exceptions import (
 class TestBankAccount(unittest.TestCase):
 
     def setUp(self):
-        """Создаётся перед каждым тестом"""
         self.owner = Owner("Иван", "Иванов", 30)
         self.acc = BankAccount(self.owner, "USD")
 
     # --- Создание ---
     def test_create_account(self):
-        self.assertEqual(self.acc._balance, 0.0)
+        self.assertEqual(self.acc._balance, Decimal("0"))
         self.assertEqual(self.acc._status, "active")
         self.assertEqual(self.acc._currency, "USD")
 
@@ -25,7 +25,15 @@ class TestBankAccount(unittest.TestCase):
     # --- Пополнение ---
     def test_deposit(self):
         self.acc.deposit(1000)
-        self.assertEqual(self.acc._balance, 1000.0)
+        self.assertEqual(self.acc._balance, Decimal("1000"))
+
+    def test_deposit_float(self):
+        self.acc.deposit(0.1)
+        self.assertEqual(self.acc._balance, Decimal("0.1"))
+
+    def test_deposit_decimal(self):
+        self.acc.deposit(Decimal("0.1"))
+        self.assertEqual(self.acc._balance, Decimal("0.1"))
 
     def test_deposit_negative(self):
         with self.assertRaises(InvalidOperationError): self.acc.deposit(-100)
@@ -33,11 +41,19 @@ class TestBankAccount(unittest.TestCase):
     def test_deposit_not_number(self):
         with self.assertRaises(InvalidOperationError): self.acc.deposit("сто")
 
+    def test_deposit_bool(self):
+        with self.assertRaises(InvalidOperationError): self.acc.deposit(True)
+
     # --- Снятие ---
     def test_withdraw(self):
         self.acc.deposit(1000)
         self.acc.withdraw(300)
-        self.assertEqual(self.acc._balance, 700.0)
+        self.assertEqual(self.acc._balance, Decimal("700"))
+
+    def test_withdraw_float(self):
+        self.acc.deposit(1000)
+        self.acc.withdraw(0.1)
+        self.assertEqual(self.acc._balance, Decimal("999.9"))
 
     def test_withdraw_insufficient(self):
         self.acc.deposit(100)
@@ -52,12 +68,12 @@ class TestBankAccount(unittest.TestCase):
         self.acc.close()
         with self.assertRaises(AccountClosedError): self.acc.withdraw(100)
 
-    def test_reactivate_account(self):
+    def test_reactivate_frozen(self):
         self.acc.deposit(500)
         self.acc.freeze()
         self.acc.active()
         self.acc.deposit(100)
-        self.assertEqual(self.acc._balance, 600.0)
+        self.assertEqual(self.acc._balance, Decimal("600"))
 
     # --- Инфо и строка ---
     def test_get_account_info(self):

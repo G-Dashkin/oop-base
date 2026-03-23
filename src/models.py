@@ -1,12 +1,11 @@
 from abc import ABC, abstractmethod
 from uuid import uuid4
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from src.exceptions import (
     AccountFrozenError, AccountClosedError,
     InvalidOperationError, InsufficientFundsError
 )
-import sys
-sys.tracebacklimit = 0
+
 
 class Owner:
     def __init__(self, first_name, last_name, age):
@@ -52,10 +51,23 @@ class BankAccount(AbstractAccount):
                 f"balance: {self._balance:.2f} {self._currency}")
 
     @staticmethod
-    def _validate_amount(summ):
-        if isinstance(summ, bool): raise InvalidOperationError("Сумма должна быть числом")
-        if not isinstance(summ, (int, float, Decimal)): raise InvalidOperationError("Сумма должна быть числом")
-        if summ <= 0: raise InvalidOperationError("Сумма должна быть положительной")
+    def _to_decimal(value) -> Decimal:
+        """Нормализация любого числа в Decimal"""
+        if isinstance(value, bool): raise InvalidOperationError("Сумма должна быть числом")
+        if isinstance(value, Decimal): return value
+        if not isinstance(value, (int, float)): raise InvalidOperationError("Сумма должна быть числом")
+        try:
+            return Decimal(str(value))
+        except InvalidOperation:
+            raise InvalidOperationError("Сумма должна быть числом")
+
+    @staticmethod
+    def _validate_positive(value: Decimal, msg: str = "Сумма должна быть положительной"):
+        if value <= 0: raise InvalidOperationError(msg)
+
+    @staticmethod
+    def _validate_non_negative(value: Decimal, msg: str):
+        if value < 0: raise InvalidOperationError(msg)
 
     def _check_status(self):
         if self._status == "frozen": raise AccountFrozenError("Счёт заморожен")
@@ -67,12 +79,14 @@ class BankAccount(AbstractAccount):
 
     def deposit(self, summ):
         self._check_status()
-        self._validate_amount(summ)
+        summ = self._to_decimal(summ)
+        self._validate_positive(summ)
         self._balance += summ
 
     def withdraw(self, summ):
         self._check_status()
-        self._validate_amount(summ)
+        summ = self._to_decimal(summ)
+        self._validate_positive(summ)
         if summ > self._balance: raise InsufficientFundsError("Недостаточно средств")
         self._balance -= summ
 
@@ -112,20 +126,21 @@ class SavingsAccount(BankAccount):
                  monthly_rate: float = 0.5,
                  account_id: str = None):
         super().__init__(owner, currency, account_id)
-        self._min_balance = Decimal(str(min_balance))
-        self._monthly_rate = Decimal(str(monthly_rate))  # 0.5 = 0.5%
+        self._min_balance = self._to_decimal(min_balance)
+        self._monthly_rate = self._to_decimal(monthly_rate)
+        self._validate_non_negative(self._min_balance, "Минимальный остаток не может быть отрицательным")
+        self._validate_non_negative(self._monthly_rate, "Ставка не может быть отрицательной")
 
     def withdraw(self, summ):
-        # Снятие с проверкой минимального остатка
         self._check_status()
-        self._validate_amount(summ)
+        summ = self._to_decimal(summ)
+        self._validate_positive(summ)
         new_balance = self._balance - summ
-        # Защита от снятия с превышением минимального баланса
-        if new_balance < self._min_balance: raise InsufficientFundsError(f"Остаток не может быть меньше {self._min_balance} {self._currency}")
+        if new_balance < self._min_balance:
+            raise InsufficientFundsError(f"Остаток не может быть меньше {self._min_balance} {self._currency}")
         self._balance = new_balance
 
     def apply_monthly_interest(self):
-        # Начислить ежемесячный процент
         self._check_status()
         interest = self._balance * self._monthly_rate / 100
         self._balance += interest
@@ -154,15 +169,16 @@ class PremiumAccount(BankAccount):
                  withdraw_commission: float = 50,
                  account_id: str = None):
         super().__init__(owner, currency, account_id)
-        self._overdraft_limit = Decimal(str(overdraft_limit))
-        self._withdraw_commission = Decimal(str(withdraw_commission))
+        self._overdraft_limit = self._to_decimal(overdraft_limit)
+        self._withdraw_commission = self._to_decimal(withdraw_commission)
+        self._validate_non_negative(self._overdraft_limit, "Лимит овердрафта не может быть отрицательным")
+        self._validate_non_negative(self._withdraw_commission, "Комиссия не может быть отрицательной")
 
     def withdraw(self, summ):
-        # Снятие с овердрафтом и комиссией
         self._check_status()
-        self._validate_amount(summ)
-        total_summ = Decimal(str(summ)) + self._withdraw_commission
-        # Защита от снятия с превышением овердрафта
+        summ = self._to_decimal(summ)
+        self._validate_positive(summ)
+        total_summ = summ + self._withdraw_commission
         if total_summ > self._balance + self._overdraft_limit: raise InsufficientFundsError("Превышен лимит овердрафта")
         self._balance -= total_summ
 
@@ -170,7 +186,7 @@ class PremiumAccount(BankAccount):
         info = super().get_account_info()
         info["type"] = "premium"
         info["overdraft_limit"] = self._overdraft_limit
-        info["withdraw_fee"] = self._withdraw_commission
+        info["withdraw_commission"] = self._withdraw_commission
         return info
 
     def __str__(self):
@@ -194,28 +210,25 @@ class InvestmentAccount(BankAccount):
         self._portfolio: dict[str, Decimal] = {}
 
     def buy_asset(self, asset_type: str, amount):
-        # Купить актив из баланса
         self._check_status()
         if asset_type not in self.ASSET_TYPES: raise InvalidOperationError(f"Тип актива '{asset_type}' не поддерживается")
-        self._validate_amount(amount)
-        amount = Decimal(str(amount))
+        amount = self._to_decimal(amount)
+        self._validate_positive(amount)
         if amount > self._balance: raise InsufficientFundsError("Недостаточно средств для покупки")
         self._balance -= amount
         self._portfolio[asset_type] = self._portfolio.get(asset_type, Decimal("0")) + amount
 
     def sell_asset(self, asset_type: str, amount):
-        # Продать актив, вернуть деньги на баланс
         self._check_status()
         if asset_type not in self._portfolio: raise InvalidOperationError(f"Актив '{asset_type}' отсутствует в портфеле")
-        self._validate_amount(amount)
-        amount = Decimal(str(amount))
+        amount = self._to_decimal(amount)
+        self._validate_positive(amount)
         if amount > self._portfolio[asset_type]: raise InsufficientFundsError(f"Недостаточно актива '{asset_type}' для продажи")
         self._portfolio[asset_type] -= amount
         if self._portfolio[asset_type] == 0: del self._portfolio[asset_type]
         self._balance += amount
 
     def project_yearly_growth(self):
-        # Прогноз годовой доходности портфеля
         total_growth = Decimal("0")
         details = {}
         for asset_type, amount in self._portfolio.items():
@@ -226,9 +239,9 @@ class InvestmentAccount(BankAccount):
         return {"total_growth": total_growth, "details": details}
 
     def withdraw(self, summ):
-        # Снятие только свободных средств (не вложенных в активы)
         self._check_status()
-        self._validate_amount(summ)
+        summ = self._to_decimal(summ)
+        self._validate_positive(summ)
         if summ > self._balance: raise InsufficientFundsError("Недостаточно свободных средств")
         self._balance -= summ
 

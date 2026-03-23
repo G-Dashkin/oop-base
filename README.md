@@ -9,23 +9,25 @@
 - Пополнение и снятие средств с валидацией
 - Управление статусами: активный, замороженный, закрытый
 - Кастомные исключения для обработки ошибок
+- Типы счетов: сберегательный, премиум, инвестиционный
 
 ## Структура проекта
 
 ```
 oop-base/
-├── README.md              # Описание проекта
-├── requirements.txt       # Зависимости
+├── README.md
+├── requirements.txt
 ├── src/
 │   ├── __init__.py
-│   ├── main.py            # Точка входа (демонстрация)
-│   ├── models.py          # Модели: Owner, AbstractAccount, BankAccount
-│   └── exceptions.py      # Кастомные исключения
+│   ├── main.py
+│   ├── models.py
+│   └── exceptions.py
 ├── tests/
 │   ├── __init__.py
-│   └── test_bank.py       # Unit-тесты
+│   ├── test_bank_account_1.py
+│   └── test_bank_account_2.py
 └── docs/
-    └── description.md     # Описание архитектуры
+    └── description.md
 ```
 
 ## Запуск
@@ -34,8 +36,12 @@ oop-base/
 # Демонстрация
 python -m src.main
 
-# Тесты
-python -m unittest tests.test_bank_account
+# Тесты (все)
+python -m unittest discover -s tests
+
+# Тесты по отдельности
+python -m unittest tests.test_bank_account_1
+python -m unittest tests.test_bank_account_2
 ```
 
 ## Классы
@@ -44,7 +50,10 @@ python -m unittest tests.test_bank_account
 |-------|----------|
 | `Owner` | Владелец счёта (имя, фамилия, возраст) |
 | `AbstractAccount` | Абстрактный базовый класс счёта |
-| `BankAccount` | Конкретная реализация банковского счёта |
+| `BankAccount` | Базовая реализация банковского счёта |
+| `SavingsAccount` | Сберегательный счёт (мин. остаток, процент) |
+| `PremiumAccount` | Премиум счёт (овердрафт, комиссия) |
+| `InvestmentAccount` | Инвестиционный счёт (портфель активов) |
 
 ## Исключения
 
@@ -52,7 +61,7 @@ python -m unittest tests.test_bank_account
 |-----------|-------------------|
 | `AccountFrozenError` | Операция с замороженным счётом |
 | `AccountClosedError` | Операция с закрытым счётом |
-| `InvalidOperationError` | Невалидная сумма или валюта |
+| `InvalidOperationError` | Невалидная сумма, валюта или параметры |
 | `InsufficientFundsError` | Недостаточно средств для снятия |
 
 ## Валюты
