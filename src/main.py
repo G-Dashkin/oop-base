@@ -1,11 +1,16 @@
 import sys
+
+from src.bank import Client
+
 sys.tracebacklimit = 0
 
 from decimal import Decimal
 from src.models import Owner, BankAccount, SavingsAccount, PremiumAccount, InvestmentAccount
+from src.bank import Bank
 from src.exceptions import (
     AccountFrozenError, AccountClosedError,
-    InvalidOperationError, InsufficientFundsError
+    InvalidOperationError, InsufficientFundsError,
+    AuthenticationError, ClientBlockedError
 )
 
 if __name__ == "__main__":
@@ -132,3 +137,94 @@ if __name__ == "__main__":
     for acc in accounts:
         info = acc.get_account_info()
         print(f"{type(acc).__name__}: balance={info['balance']}, status={info['status']}")
+
+    # === DAY 3: Система Bank ===
+    print("\n\n========== DAY 3: Система Bank ==========")
+
+    bank = Bank("СуперБанк")
+    print(bank)
+
+    # Создаём клиентов
+    print("\n--- Клиенты ---")
+    client1 = Client("Алексей", "Смирнов", 35, phone="+79001112233")
+    client1.set_pin("1111")
+    client2 = Client("Мария", "Козлова", 28, email="maria@mail.ru")
+    client2.set_pin("2222")
+
+    bank.add_client(client1)
+    bank.add_client(client2)
+    print(client1)
+    print(client2)
+
+    # Возраст < 18
+    try: Client("Петя", "Малой", 16)
+    except InvalidOperationError as e: print(f"Несовершеннолетний: {e}")
+
+    # Аутентификация
+    print("\n--- Аутентификация ---")
+    bank.authenticate_client(client1._id, "1111")
+    print(f"Алексей: вход успешен")
+
+    # Неверный PIN
+    try: bank.authenticate_client(client2._id, "9999")
+    except AuthenticationError as e: print(f"Мария: {e}")
+
+    # Блокировка после 3 попыток
+    print("\n--- Блокировка ---")
+    hacker = Client("Хакер", "Хакеров", 20)
+    hacker.set_pin("7777")
+    bank.add_client(hacker)
+
+    for i in range(3):
+        try: bank.authenticate_client(hacker._id, "wrong")
+        except (AuthenticationError, ClientBlockedError) as e: print(f"  Попытка {i+1}: {e}")
+    print(f"Статус хакера: {hacker._status}")
+
+    # Заблокированный не может открыть счёт
+    try: bank.open_account(hacker._id)
+    except ClientBlockedError as e: print(f"Открытие счёта: {e}")
+
+    # Открываем счета
+    print("\n--- Счета ---")
+    acc1 = bank.open_account(client1._id, "basic", "RUB")
+    acc2 = bank.open_account(client1._id, "savings", "USD", min_balance=500, monthly_rate=1.0)
+    acc3 = bank.open_account(client2._id, "premium", "RUB", overdraft_limit=10000)
+
+    acc1.deposit(50000)
+    acc2.deposit(10000)
+    acc3.deposit(75000)
+
+    print(f"Алексей: {len(client1._accounts)} счетов")
+    print(f"Мария: {len(client2._accounts)} счетов")
+
+    # Заморозка/разморозка через банк
+    print("\n--- Заморозка ---")
+    bank.freeze_account(client1._id, acc1._id)
+    print(f"Счёт {acc1._id}: {acc1._status}")
+    bank.unfreeze_account(client1._id, acc1._id)
+    print(f"Счёт {acc1._id}: {acc1._status}")
+
+    # Поиск
+    print("\n--- Поиск ---")
+    rub_accounts = bank.search_accounts(currency="RUB")
+    print(f"Счетов в RUB: {len(rub_accounts)}")
+
+    client1_accounts = bank.search_accounts(client_id=client1._id)
+    print(f"Счетов у Алексея: {len(client1_accounts)}")
+
+    # Аналитика
+    print("\n--- Аналитика ---")
+    print(f"Баланс Алексея: {bank.get_total_balance(client1._id)}")
+    print(f"Баланс всего банка: {bank.get_total_balance()}")
+
+    ranking = bank.get_clients_ranking()
+    print("Рейтинг клиентов:")
+    for i, (client, total) in enumerate(ranking, 1):
+        print(f"  {i}. {client.full_name}: {total}")
+
+    # Журнал
+    print("\n--- Журнал (последние 5 записей) ---")
+    for entry in bank._log[-5:]:
+        print(f"  {entry}")
+
+    print(f"\n{bank}")

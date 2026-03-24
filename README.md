@@ -10,6 +10,8 @@
 - Управление статусами: активный, замороженный, закрытый
 - Кастомные исключения для обработки ошибок
 - Типы счетов: сберегательный, премиум, инвестиционный
+- Система Bank: клиенты, аутентификация, безопасность
+- Поиск счетов и рейтинг клиентов
 
 ## Структура проекта
 
@@ -21,11 +23,13 @@ oop-base/
 │   ├── __init__.py
 │   ├── main.py
 │   ├── models.py
+│   ├── bank.py
 │   └── exceptions.py
 ├── tests/
 │   ├── __init__.py
 │   ├── test_bank_account_1.py
-│   └── test_bank_account_2.py
+│   ├── test_bank_account_2.py
+│   └── test_bank_account_3.py
 └── docs/
     └── description.md
 ```
@@ -42,6 +46,7 @@ python -m unittest discover -s tests
 # Тесты по отдельности
 python -m unittest tests.test_bank_account_1
 python -m unittest tests.test_bank_account_2
+python -m unittest tests.test_bank_account_3
 ```
 
 ## Классы
@@ -49,11 +54,13 @@ python -m unittest tests.test_bank_account_2
 | Класс | Описание |
 |-------|----------|
 | `Owner` | Владелец счёта (имя, фамилия, возраст) |
+| `Client` | Клиент банка (ФИО, контакты, PIN, список счетов) |
 | `AbstractAccount` | Абстрактный базовый класс счёта |
 | `BankAccount` | Базовая реализация банковского счёта |
 | `SavingsAccount` | Сберегательный счёт (мин. остаток, процент) |
 | `PremiumAccount` | Премиум счёт (овердрафт, комиссия) |
 | `InvestmentAccount` | Инвестиционный счёт (портфель активов) |
+| `Bank` | Управляющий класс (клиенты, счета, безопасность) |
 
 ## Исключения
 
@@ -63,6 +70,9 @@ python -m unittest tests.test_bank_account_2
 | `AccountClosedError` | Операция с закрытым счётом |
 | `InvalidOperationError` | Невалидная сумма, валюта или параметры |
 | `InsufficientFundsError` | Недостаточно средств для снятия |
+| `AuthenticationError` | Неверный PIN |
+| `ClientBlockedError` | Клиент заблокирован |
+| `NightOperationError` | Операция в запрещённое время |
 
 ## Валюты
 
