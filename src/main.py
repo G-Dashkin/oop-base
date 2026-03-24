@@ -1,12 +1,7 @@
 import sys
 
-from src.bank import Client
-
-sys.tracebacklimit = 0
-
-from decimal import Decimal
 from src.models import Owner, BankAccount, SavingsAccount, PremiumAccount, InvestmentAccount
-from src.bank import Bank
+from src.bank import Bank, Client
 from src.exceptions import (
     AccountFrozenError, AccountClosedError,
     InvalidOperationError, InsufficientFundsError,
@@ -14,6 +9,7 @@ from src.exceptions import (
 )
 
 if __name__ == "__main__":
+    sys.tracebacklimit = 0  # только для прямого запуска, не при импорте
     # Создаём владельца и счёт
     owner = Owner("Иван", "Иванов", 30)
     account = BankAccount(owner, "RUB")
@@ -204,6 +200,15 @@ if __name__ == "__main__":
     bank.unfreeze_account(client1._id, acc1._id)
     print(f"Счёт {acc1._id}: {acc1._status}")
 
+    # Закрытие счёта (нужен нулевой баланс)
+    print("\n--- Закрытие счёта ---")
+    try: bank.close_account(client1._id, acc1._id)
+    except InvalidOperationError as e: print(f"С балансом: {e}")
+    acc1.withdraw(50000)  # обнуляем
+    bank.close_account(client1._id, acc1._id)
+    print(f"Счёт закрыт, осталось у Алексея: {len(client1._accounts)}")
+    print(f"Счетов в банке: {len(bank._accounts)}")
+
     # Поиск
     print("\n--- Поиск ---")
     rub_accounts = bank.search_accounts(currency="RUB")
@@ -219,12 +224,10 @@ if __name__ == "__main__":
 
     ranking = bank.get_clients_ranking()
     print("Рейтинг клиентов:")
-    for i, (client, total) in enumerate(ranking, 1):
-        print(f"  {i}. {client.full_name}: {total}")
+    for i, (client, total) in enumerate(ranking, 1): print(f"  {i}. {client.full_name}: {total}")
 
     # Журнал
     print("\n--- Журнал (последние 5 записей) ---")
-    for entry in bank._log[-5:]:
-        print(f"  {entry}")
+    for entry in bank._log[-5:]: print(f"  {entry}")
 
     print(f"\n{bank}")

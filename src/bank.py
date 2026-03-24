@@ -59,19 +59,21 @@ class Bank:
     NIGHT_END = 5     # 05:00
     MAX_ATTEMPTS = 3
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, time_provider=None):
         self._name = name
-        self._clients: dict[str, Client] = {}
-        self._accounts: dict[str, BankAccount] = {}
+        self._clients: dict[str, Client] = {}     # client_id -> Client
+        self._accounts: dict[str, BankAccount] = {}  # account_id -> BankAccount
         self._log: list[str] = []  # журнал действий
+        # Инъекция зависимости: в тестах можно подменить на lambda: fake_datetime
+        self._get_now = time_provider or datetime.now
 
     def _check_night(self):
         """Запрет операций с 00:00 до 05:00"""
-        hour = datetime.now().hour
+        hour = self._get_now().hour
         if self.NIGHT_START <= hour < self.NIGHT_END: raise NightOperationError("Операции запрещены с 00:00 до 05:00")
 
     def _log_action(self, action: str):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = self._get_now().strftime("%Y-%m-%d %H:%M:%S")
         self._log.append(f"[{timestamp}] {action}")
 
     # --- Клиенты ---
@@ -86,13 +88,36 @@ class Bank:
         if client_id not in self._clients: raise InvalidOperationError("Клиент не найден")
         return self._clients[client_id]
 
-    # --- Счета ---
-    def open_account(self, client_id: str, account_type: str = "basic", currency: str = "RUB", **kwargs) -> BankAccount:
+    # --- Аутентификация ---
 
+    def authenticate_client(self, client_id: str, pin: str) -> bool:
+        """Аутентификация по PIN. 3 неудачи → блокировка"""
+        client = self.get_client(client_id)
+        if client._status == "blocked": raise ClientBlockedError("Клиент заблокирован")
+
+        if client._pin != pin:
+            client._failed_attempts += 1
+            remaining = self.MAX_ATTEMPTS - client._failed_attempts
+            self._log_action(f"Неудачная попытка входа: {client._id} (осталось: {remaining})")
+            if client._failed_attempts >= self.MAX_ATTEMPTS:
+                client._status = "blocked"
+                client._suspicious = True
+                self._log_action(f"Клиент заблокирован: {client._id}")
+                raise ClientBlockedError("Клиент заблокирован после 3 неудачных попыток")
+            raise AuthenticationError(f"Неверный PIN. Осталось попыток: {remaining}")
+
+        client._failed_attempts = 0
+        self._log_action(f"Успешная аутентификация: {client._id}")
+        return True
+
+    # --- Счета ---
+
+    def open_account(self, client_id: str, account_type: str = "basic", currency: str = "RUB", **kwargs) -> BankAccount:
         """Открыть счёт для клиента"""
         self._check_night()
         client = self.get_client(client_id)
         if client._status == "blocked": raise ClientBlockedError("Клиент заблокирован")
+
         if account_type not in ACCOUNT_TYPES: raise InvalidOperationError(f"Тип счёта '{account_type}' не поддерживается")
 
         # Owner создаётся из Client для совместимости с BankAccount
@@ -106,13 +131,16 @@ class Bank:
         return account
 
     def close_account(self, client_id: str, account_id: str):
-        """Закрыть счёт клиента"""
+        """Закрыть счёт: проверяет нулевой баланс, удаляет из реестров"""
         self._check_night()
         client = self.get_client(client_id)
         account = self._get_account(account_id)
         if account_id not in client._accounts: raise InvalidOperationError("Счёт не принадлежит клиенту")
+        if account._balance != Decimal("0"): raise InvalidOperationError("Нельзя закрыть счёт с ненулевым балансом")
 
         account.close()
+        client.remove_account(account_id)
+        del self._accounts[account_id]
         self._log_action(f"Закрыт счёт: {account_id} клиента {client._id}")
 
     def freeze_account(self, client_id: str, account_id: str):
@@ -139,30 +167,8 @@ class Bank:
         if account_id not in self._accounts: raise InvalidOperationError("Счёт не найден")
         return self._accounts[account_id]
 
-    # --- Аутентификация ---
-    def authenticate_client(self, client_id: str, pin: str) -> bool:
-        """Аутентификация по PIN. 3 неудачи → блокировка"""
-        client = self.get_client(client_id)
-        if client._status == "blocked": raise ClientBlockedError("Клиент заблокирован")
-
-        if client._pin != pin:
-            client._failed_attempts += 1
-            remaining = self.MAX_ATTEMPTS - client._failed_attempts
-            self._log_action(f"Неудачная попытка входа: {client._id} (осталось: {remaining})")
-            if client._failed_attempts >= self.MAX_ATTEMPTS:
-                client._status = "blocked"
-                client._suspicious = True
-                self._log_action(f"Клиент заблокирован: {client._id}")
-                raise ClientBlockedError("Клиент заблокирован после 3 неудачных попыток")
-            raise AuthenticationError(f"Неверный PIN. Осталось попыток: {remaining}")
-
-        client._failed_attempts = 0
-        self._log_action(f"Успешная аутентификация: {client._id}")
-        return True
-
     # --- Поиск ---
-    def search_accounts(self, client_id: str = None, currency: str = None,
-                        status: str = None, account_type: str = None) -> list[BankAccount]:
+    def search_accounts(self, client_id: str = None, currency: str = None, status: str = None, account_type: str = None) -> list[BankAccount]:
         """Поиск счетов по фильтрам"""
         results = list(self._accounts.values())
 
@@ -192,12 +198,12 @@ class Bank:
         """Рейтинг клиентов по суммарному балансу (от большего к меньшему)"""
         ranking = []
         for client in self._clients.values():
-            total = sum(
-                (self._accounts[aid]._balance for aid in client._accounts if aid in self._accounts),
-                Decimal("0")
-            )
+            total = sum( (self._accounts[aid]._balance for aid in client._accounts if aid in self._accounts), Decimal("0"))
             ranking.append((client, total))
-        # sorted с key — сортировка по второму элементу кортежа, reverse=True = по убыванию
+        # сортировка по второму элементу кортежа
         return sorted(ranking, key=lambda x: x[1], reverse=True)
 
-    def __str__(self): return (f"Bank '{self._name}' | "f"clients: {len(self._clients)} | "f"accounts: {len(self._accounts)}")
+    def __str__(self):
+        return (f"Bank '{self._name}' | "
+                f"clients: {len(self._clients)} | "
+                f"accounts: {len(self._accounts)}")

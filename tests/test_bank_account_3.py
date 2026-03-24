@@ -1,12 +1,14 @@
 import unittest
-from unittest.mock import patch
+from datetime import datetime
 from decimal import Decimal
-from src.bank import Bank
-from src.bank import Client
+from src.bank import Bank, Client
 from src.exceptions import (
     InvalidOperationError, AuthenticationError,
     ClientBlockedError, NightOperationError
 )
+
+# Фабрика: возвращает функцию, которая отдаёт datetime с нужным часом
+def make_time(hour): return lambda: datetime(2025, 6, 15, hour, 0, 0)
 
 
 class TestClient(unittest.TestCase):
@@ -30,13 +32,13 @@ class TestClient(unittest.TestCase):
         self.assertEqual(c._pin, "1234")
 
     def test_set_invalid_pin(self):
-        c = Client("Тест", "Тестов", 25)
-        with self.assertRaises(InvalidOperationError): c.set_pin("abc")
-        with self.assertRaises(InvalidOperationError): c.set_pin("12345")
+        client = Client("Тест", "Тестов", 25)
+        with self.assertRaises(InvalidOperationError): client.set_pin("abc")
+        with self.assertRaises(InvalidOperationError): client.set_pin("12345")
 
     def test_str(self):
-        c = Client("Иван", "Иванов", 30)
-        self.assertIn("Иван Иванов", str(c))
+        client = Client("Иван", "Иванов", 30)
+        self.assertIn("Иван Иванов", str(client))
 
 
 class TestBank(unittest.TestCase):
@@ -47,8 +49,7 @@ class TestBank(unittest.TestCase):
         self.client.set_pin("1234")
         self.bank.add_client(self.client)
 
-    def test_add_client(self):
-        self.assertIn(self.client._id, self.bank._clients)
+    def test_add_client(self): self.assertIn(self.client._id, self.bank._clients)
 
     def test_add_duplicate_client(self):
         with self.assertRaises(InvalidOperationError): self.bank.add_client(self.client)
@@ -66,17 +67,31 @@ class TestBank(unittest.TestCase):
         with self.assertRaises(InvalidOperationError):
             self.bank.open_account(self.client._id, "crypto", "USD")
 
-    def test_close_account(self):
+    def test_close_account_zero_balance(self):
         acc = self.bank.open_account(self.client._id)
-        self.bank.close_account(self.client._id, acc._id)
-        self.assertEqual(acc._status, "closed")
+        acc_id = acc._id
+        self.bank.close_account(self.client._id, acc_id)
+        self.assertNotIn(acc_id, self.bank._accounts)
+        self.assertNotIn(acc_id, self.client._accounts)
+
+    def test_close_account_nonzero_balance(self):
+        acc = self.bank.open_account(self.client._id)
+        acc.deposit(1000)
+        with self.assertRaises(InvalidOperationError): self.bank.close_account(self.client._id, acc._id)
+
+    def test_closed_account_not_in_search(self):
+        account = self.bank.open_account(self.client._id)
+        account_id = account._id
+        self.bank.close_account(self.client._id, account_id)
+        results = self.bank.search_accounts(client_id=self.client._id)
+        self.assertEqual(len(results), 0)
 
     def test_freeze_unfreeze(self):
-        acc = self.bank.open_account(self.client._id)
-        self.bank.freeze_account(self.client._id, acc._id)
-        self.assertEqual(acc._status, "frozen")
-        self.bank.unfreeze_account(self.client._id, acc._id)
-        self.assertEqual(acc._status, "active")
+        account = self.bank.open_account(self.client._id)
+        self.bank.freeze_account(self.client._id, account._id)
+        self.assertEqual(account._status, "frozen")
+        self.bank.unfreeze_account(self.client._id, account._id)
+        self.assertEqual(account._status, "active")
 
 
 class TestAuthentication(unittest.TestCase):
@@ -97,25 +112,20 @@ class TestAuthentication(unittest.TestCase):
 
     def test_block_after_3_attempts(self):
         for _ in range(2):
-            with self.assertRaises(AuthenticationError):
-                self.bank.authenticate_client(self.client._id, "wrong")
-        with self.assertRaises(ClientBlockedError):
-            self.bank.authenticate_client(self.client._id, "wrong")
+            with self.assertRaises(AuthenticationError): self.bank.authenticate_client(self.client._id, "wrong")
+        with self.assertRaises(ClientBlockedError): self.bank.authenticate_client(self.client._id, "wrong")
         self.assertEqual(self.client._status, "blocked")
 
     def test_blocked_client_cannot_login(self):
         self.client._status = "blocked"
-        with self.assertRaises(ClientBlockedError):
-            self.bank.authenticate_client(self.client._id, "5555")
+        with self.assertRaises(ClientBlockedError): self.bank.authenticate_client(self.client._id, "5555")
 
     def test_blocked_client_cannot_open_account(self):
         self.client._status = "blocked"
-        with self.assertRaises(ClientBlockedError):
-            self.bank.open_account(self.client._id)
+        with self.assertRaises(ClientBlockedError): self.bank.open_account(self.client._id)
 
     def test_reset_attempts_on_success(self):
-        with self.assertRaises(AuthenticationError):
-            self.bank.authenticate_client(self.client._id, "wrong")
+        with self.assertRaises(AuthenticationError): self.bank.authenticate_client(self.client._id, "wrong")
         self.bank.authenticate_client(self.client._id, "5555")
         self.assertEqual(self.client._failed_attempts, 0)
 
@@ -123,22 +133,29 @@ class TestAuthentication(unittest.TestCase):
 class TestNightRestriction(unittest.TestCase):
 
     def setUp(self):
-        self.bank = Bank("TestBank")
         self.client = Client("Ночь", "Тестов", 25)
-        self.bank.add_client(self.client)
 
-    @patch("src.bank.datetime")
-    def test_night_block(self, mock_dt):
-        mock_dt.now.return_value.hour = 3  # 03:00 — ночь
-        with self.assertRaises(NightOperationError):
-            self.bank.open_account(self.client._id)
+    def test_night_block(self):
+        bank = Bank("TestBank", time_provider=make_time(3))  # 03:00
+        bank.add_client(self.client)
+        with self.assertRaises(NightOperationError): bank.open_account(self.client._id)
 
-    @patch("src.bank.datetime")
-    def test_day_ok(self, mock_dt):
-        mock_dt.now.return_value.hour = 10  # 10:00 — день
-        mock_dt.now.return_value.strftime = lambda fmt: "2025-01-01 10:00:00"
-        acc = self.bank.open_account(self.client._id)
+    def test_day_ok(self):
+        bank = Bank("TestBank", time_provider=make_time(10))  # 10:00
+        bank.add_client(self.client)
+        acc = bank.open_account(self.client._id)
         self.assertIsNotNone(acc)
+
+    def test_boundary_5am_allowed(self):
+        bank = Bank("TestBank", time_provider=make_time(5))  # 05:00 — уже можно
+        bank.add_client(self.client)
+        acc = bank.open_account(self.client._id)
+        self.assertIsNotNone(acc)
+
+    def test_midnight_blocked(self):
+        bank = Bank("TestBank", time_provider=make_time(0))  # 00:00
+        bank.add_client(self.client)
+        with self.assertRaises(NightOperationError): bank.open_account(self.client._id)
 
 
 class TestSearchAndAnalytics(unittest.TestCase):
@@ -187,8 +204,13 @@ class TestSearchAndAnalytics(unittest.TestCase):
         self.assertEqual(ranking[0][0]._id, self.c2._id)  # Борис: 10000
         self.assertEqual(ranking[1][0]._id, self.c1._id)  # Анна: 8000
 
-    def test_str(self):
-        self.assertIn("TestBank", str(self.bank))
+    def test_closed_account_excluded_from_balance(self):
+        self.acc1.withdraw(5000)  # обнуляем баланс
+        self.bank.close_account(self.c1._id, self.acc1._id)
+        total = self.bank.get_total_balance(self.c1._id)
+        self.assertEqual(total, Decimal("3000"))  # только acc2
+
+    def test_str(self): self.assertIn("TestBank", str(self.bank))
 
 
 if __name__ == "__main__":
