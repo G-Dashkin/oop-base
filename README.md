@@ -47,6 +47,7 @@ python -m unittest discover -s tests
 python -m unittest tests.test_bank_account_1
 python -m unittest tests.test_bank_account_2
 python -m unittest tests.test_bank_account_3
+python -m unittest tests.test_bank_account_4
 ```
 
 ## Классы
