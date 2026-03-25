@@ -24,12 +24,14 @@ oop-base/
 │   ├── main.py
 │   ├── models.py
 │   ├── bank.py
+│   ├── transactions.py
 │   └── exceptions.py
 ├── tests/
 │   ├── __init__.py
 │   ├── test_bank_account_1.py
 │   ├── test_bank_account_2.py
-│   └── test_bank_account_3.py
+│   ├── test_bank_account_3.py
+│   └── test_bank_account_4.py
 └── docs/
     └── description.md
 ```
