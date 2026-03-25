@@ -2,6 +2,7 @@ import sys
 
 from src.models import Owner, BankAccount, SavingsAccount, PremiumAccount, InvestmentAccount
 from src.bank import Bank, Client
+from src.transactions import Transaction, TransactionQueue, TransactionProcessor
 from src.exceptions import (
     AccountFrozenError, AccountClosedError,
     InvalidOperationError, InsufficientFundsError,
@@ -32,8 +33,7 @@ if __name__ == "__main__":
     # Информация
     info = account.get_account_info()
     print("Информация об аккаунте (метод .get_account_info()):")
-    for key, value in info.items():
-        print(f"  {key}: {value}")
+    for key, value in info.items(): print(f"  {key}: {value}")
     print("--------------------------------------")
 
     # Ошибка: недостаточно средств
@@ -120,8 +120,7 @@ if __name__ == "__main__":
 
     projection = invest.project_yearly_growth()
     print(f"Прогноз годовой доходности: {projection['total_growth']}")
-    for asset, data in projection["details"].items():
-        print(f"  {asset}: {data['amount']} × {data['rate']} = +{data['growth']}")
+    for asset, data in projection["details"].items(): print(f"  {asset}: {data['amount']} × {data['rate']} = +{data['growth']}")
 
     invest.sell_asset("bonds", 2000)
     print(f"Продал bonds на 2000, баланс: {invest._balance}")
@@ -130,12 +129,12 @@ if __name__ == "__main__":
     # --- Полиморфизм ---
     print("\n=== Полиморфизм ===")
     accounts = [account, savings, premium, invest]
-    for acc in accounts:
-        info = acc.get_account_info()
-        print(f"{type(acc).__name__}: balance={info['balance']}, status={info['status']}")
+    for account in accounts:
+        info = account.get_account_info()
+        print(f"{type(account).__name__}: balance={info['balance']}, status={info['status']}")
 
-    # === DAY 3: Система Bank ===
-    print("\n\n========== DAY 3: Система Bank ==========")
+    # === Система Bank ===
+    print("\n\n========== Система Bank ==========")
 
     bank = Bank("СуперБанк")
     print(bank)
@@ -182,30 +181,30 @@ if __name__ == "__main__":
 
     # Открываем счета
     print("\n--- Счета ---")
-    acc1 = bank.open_account(client1._id, "basic", "RUB")
-    acc2 = bank.open_account(client1._id, "savings", "USD", min_balance=500, monthly_rate=1.0)
-    acc3 = bank.open_account(client2._id, "premium", "RUB", overdraft_limit=10000)
+    account1 = bank.open_account(client1._id, "basic", "RUB")
+    account2 = bank.open_account(client1._id, "savings", "USD", min_balance=500, monthly_rate=1.0)
+    account3 = bank.open_account(client2._id, "premium", "RUB", overdraft_limit=10000)
 
-    acc1.deposit(50000)
-    acc2.deposit(10000)
-    acc3.deposit(75000)
+    account1.deposit(50000)
+    account2.deposit(10000)
+    account3.deposit(75000)
 
     print(f"Алексей: {len(client1._accounts)} счетов")
     print(f"Мария: {len(client2._accounts)} счетов")
 
     # Заморозка/разморозка через банк
     print("\n--- Заморозка ---")
-    bank.freeze_account(client1._id, acc1._id)
-    print(f"Счёт {acc1._id}: {acc1._status}")
-    bank.unfreeze_account(client1._id, acc1._id)
-    print(f"Счёт {acc1._id}: {acc1._status}")
+    bank.freeze_account(client1._id, account1._id)
+    print(f"Счёт {account1._id}: {account1._status}")
+    bank.unfreeze_account(client1._id, account1._id)
+    print(f"Счёт {account1._id}: {account1._status}")
 
     # Закрытие счёта (нужен нулевой баланс)
     print("\n--- Закрытие счёта ---")
-    try: bank.close_account(client1._id, acc1._id)
+    try: bank.close_account(client1._id, account1._id)
     except InvalidOperationError as e: print(f"С балансом: {e}")
-    acc1.withdraw(50000)  # обнуляем
-    bank.close_account(client1._id, acc1._id)
+    account1.withdraw(50000)  # обнуляем
+    bank.close_account(client1._id, account1._id)
     print(f"Счёт закрыт, осталось у Алексея: {len(client1._accounts)}")
     print(f"Счетов в банке: {len(bank._accounts)}")
 
@@ -231,3 +230,73 @@ if __name__ == "__main__":
     for entry in bank._log[-5:]: print(f"  {entry}")
 
     print(f"\n{bank}")
+
+    # === Система транзакций ===
+    print("\n\n========== Система транзакций ==========")
+
+    bank2 = Bank("ТранзБанк")
+    alice = Client("Алиса", "Иванова", 25)
+    bob = Client("Боб", "Петров", 30)
+    bank2.add_client(alice)
+    bank2.add_client(bob)
+
+    account_alice = bank2.open_account(alice._id, "basic", "RUB")
+    account_bob = bank2.open_account(bob._id, "basic", "RUB")
+    account_usd = bank2.open_account(alice._id, "basic", "USD")
+
+    transaction_queue = TransactionQueue()
+    transaction_processor = TransactionProcessor(bank2)
+
+    # Создаём 10 транзакций
+    print("\n--- Создаём 10 транзакций ---")
+    transaction_queue.add(Transaction("deposit", 50000, "RUB", receiver_id=account_alice._id))   # 1
+    transaction_queue.add(Transaction("deposit", 20000, "RUB", receiver_id=account_bob._id))     # 2
+    transaction_queue.add(Transaction("deposit", 1000, "USD", receiver_id=account_usd._id))      # 3
+    transaction_queue.add(Transaction("withdraw", 5000, "RUB", sender_id=account_alice._id))     # 4
+    transaction_queue.add(Transaction("transfer", 3000, "RUB", sender_id=account_alice._id, receiver_id=account_bob._id))     # 5
+    transaction_queue.add(Transaction("transfer", 1000, "RUB", sender_id=account_bob._id, receiver_id=account_alice._id))     # 6
+
+    # 7-я с приоритетом
+    transaction_queue.add_priority(Transaction("deposit", 100, "RUB", receiver_id=account_alice._id))
+
+    # 8-я — отмена
+    transaction_to_cancel = Transaction("deposit", 999, "RUB", receiver_id=account_bob._id)
+    transaction_queue.add(transaction_to_cancel)
+    transaction_queue.cancel(transaction_to_cancel._id)
+
+    # 9-я — отложенная
+    deferred_tx = Transaction("deposit", 777, "RUB", receiver_id=account_alice._id)
+    transaction_queue.defer(deferred_tx)
+
+    # 10-я — провальная (снятие с пустого)
+    transaction_queue.add(Transaction("withdraw", 99999, "RUB", sender_id=account_bob._id))
+
+    print(transaction_queue)
+
+    # Обработка
+    print("\n--- Обработка очереди ---")
+    transaction_processor.process_all(transaction_queue)
+
+    for tx in transaction_queue._queue: print(f"  {tx}")
+
+    # Выпускаем отложенную
+    print("\n--- Отложенные ---")
+    transaction_queue.release_deferred()
+    transaction_processor.process_all(transaction_queue)
+    print(f"  {deferred_tx}")
+
+    # Результаты
+    print("\n--- Балансы ---")
+    print(f"  Алиса RUB: {account_alice._balance}")
+    print(f"  Боб RUB:   {account_bob._balance}")
+    print(f"  Алиса USD: {account_bob._balance}")
+
+    # Конвертация
+    print("\n--- Конвертация ---")
+    converted = transaction_processor.convert(account_usd._balance, "USD", "RUB")
+    print(f"  {account_usd._balance} USD = {converted} RUB")
+
+    # Ошибки
+    if transaction_processor._errors:
+        print(f"\n--- Ошибки ({len(transaction_processor._errors)}) ---")
+        for error in transaction_processor._errors: print(f"  {error}")
