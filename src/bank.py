@@ -9,7 +9,7 @@ from src.exceptions import (
     AuthenticationError, ClientBlockedError,
     NightOperationError, InvalidOperationError
 )
-from src.audit import AuditLog, RiskAnalyzer, LogLevel
+from src.audit import AuditLog, RiskAnalyzer, LogLevel, RiskLevel
 
 # Типы счетов — маппинг строки на класс
 ACCOUNT_TYPES = {
@@ -150,6 +150,7 @@ class Bank:
         client = self.get_client(client_id)
         account = self._get_account(account_id)
         if account_id not in client._accounts: raise InvalidOperationError("Счёт не принадлежит клиенту")
+
         account.freeze()
         self._log_action(f"Заморожен счёт: {account_id} клиента {client._id}")
 
@@ -172,30 +173,45 @@ class Bank:
         if client_id:
             client = self.get_client(client_id)
             results = [a for a in results if a._id in client._accounts]
-        if currency:  results = [a for a in results if a._currency == currency]
+        if currency: results = [a for a in results if a._currency == currency]
         if status: results = [a for a in results if a._status == status]
         if account_type:
             cls = ACCOUNT_TYPES.get(account_type)
             if cls: results = [a for a in results if type(a) is cls]
-
         return results
 
     # --- Аналитика ---
+    # конвертируем всё в RUB перед суммированием чтобы не складывать разные валюты
+    RATES_TO_RUB = {
+        "RUB": Decimal("1"),
+        "USD": Decimal("90"),
+        "EUR": Decimal("100"),
+        "KZT": Decimal("0.20"),
+        "CNY": Decimal("12"),
+    }
+
+    # Баланс счёта в рублях для сравнения
+    def _balance_in_rub(self, account) -> Decimal:
+        rate = self.RATES_TO_RUB.get(account._currency, Decimal("1"))
+        return account._balance * rate
+
+    # Суммарный баланс в RUB (конвертированный): по клиенту или всего банка
     def get_total_balance(self, client_id: str = None) -> Decimal:
-        #  Суммарный баланс: по клиенту или всего банка
         if client_id:
             client = self.get_client(client_id)
             accounts = [self._accounts[aid] for aid in client._accounts if aid in self._accounts]
         else: accounts = list(self._accounts.values())
-        return sum((a._balance for a in accounts), Decimal("0"))
+        return sum((self._balance_in_rub(a) for a in accounts), Decimal("0"))
 
+    # Рейтинг клиентов по суммарному балансу в RUB (от большего к меньшему)
     def get_clients_ranking(self) -> list[tuple[Client, Decimal]]:
-        #  Рейтинг клиентов по суммарному балансу (от большего к меньшему)
         ranking = []
         for client in self._clients.values():
-            total = sum( (self._accounts[aid]._balance for aid in client._accounts if aid in self._accounts), Decimal("0"))
+            total = sum(
+                (self._balance_in_rub(self._accounts[aid]) for aid in client._accounts if aid in self._accounts),
+                Decimal("0")
+            )
             ranking.append((client, total))
-        # сортировка по второму элементу кортежа
         return sorted(ranking, key=lambda x: x[1], reverse=True)
 
     def __str__(self):

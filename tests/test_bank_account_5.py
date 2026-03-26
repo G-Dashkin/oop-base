@@ -212,7 +212,7 @@ class TestProcessorWithRisk(unittest.TestCase):
 
 
 class TestFullScenarioWithAudit(unittest.TestCase):
-    # 10 транзакций: обычные + подозрительные
+    """10 транзакций: обычные + подозрительные"""
 
     def test_mixed_transactions(self):
         audit = AuditLog(filepath="/tmp/test_full_audit.log")
@@ -256,6 +256,122 @@ class TestFullScenarioWithAudit(unittest.TestCase):
         self.assertEqual(len(completed), 8)  # 4 обычных + 4 с риском MEDIUM (не блокируются)
         self.assertEqual(len(failed), 2)     # 2 HIGH → заблокированы
         self.assertTrue(len(audit.get_suspicious()) > 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class TestMentorReviewFixes(unittest.TestCase):
+    """Тесты по замечаниям ментора"""
+
+    def setUp(self):
+        self.bank = Bank("TestBank", time_provider=day_time)
+        self.client = Client("Тест", "Тестов", 30)
+        self.bank.add_client(self.client)
+        self.acc_rub = self.bank.open_account(self.client._id, "basic", "RUB")
+        self.acc_usd = self.bank.open_account(self.client._id, "basic", "USD")
+        self.acc_rub.deposit(10000)
+        self.acc_usd.deposit(100)
+        self.processor = TransactionProcessor(self.bank)
+
+    # transfer атомарен — при ошибке deposit деньги не должны списаться дважды
+    def test_transfer_atomic_no_double_withdraw(self):
+        frozen_acc = self.bank.open_account(self.client._id, "basic", "RUB")
+        frozen_acc.freeze()  # deposit упадёт
+        initial = self.acc_rub._balance
+        transaction = Transaction("transfer", 1000, "RUB", sender_id=self.acc_rub._id, receiver_id=frozen_acc._id)
+        self.processor.process(transaction)
+        self.assertEqual(transaction._status, "failed")
+        # деньги не списались (withdraw не выполнился — frozen вызовет AccountFrozenError до withdraw)
+        self.assertEqual(self.acc_rub._balance, initial)
+
+    def test_transfer_no_retry(self):
+        # transfer не должен повторяться — проверяем через ошибку
+        frozen_acc = self.bank.open_account(self.client._id, "basic", "RUB")
+        frozen_acc.freeze()
+
+        transaction = Transaction("transfer", 500, "RUB", sender_id=self.acc_rub._id, receiver_id=frozen_acc._id)
+        self.processor.process(transaction)
+        # статус failed, не вошёл в бесконечный retry
+        self.assertEqual(transaction._status, "failed")
+
+    # валюта транзакции должна совпадать с валютой счёта
+    def test_deposit_wrong_currency_fails(self):
+        # пытаемся внести USD на RUB-счёт
+        transaction = Transaction("deposit", 100, "USD", receiver_id=self.acc_rub._id)
+        self.processor.process(transaction)
+        self.assertEqual(transaction._status, "failed")
+        self.assertIn("Валюта", transaction._failure_reason)
+
+    def test_withdraw_wrong_currency_fails(self):
+        transaction = Transaction("withdraw", 100, "USD", sender_id=self.acc_rub._id)
+        self.processor.process(transaction)
+        self.assertEqual(transaction._status, "failed")
+
+    def test_transfer_wrong_currency_fails(self):
+        # sender_id — RUB счёт, но валюта транзакции USD
+        transaction = Transaction("transfer", 100, "USD", sender_id=self.acc_rub._id, receiver_id=self.acc_usd._id)
+        self.processor.process(transaction)
+        self.assertEqual(transaction._status, "failed")
+
+    def test_deposit_correct_currency_passes(self):
+        transaction = Transaction("deposit", 500, "RUB", receiver_id=self.acc_rub._id)
+        self.processor.process(transaction)
+        self.assertEqual(transaction._status, "completed")
+
+    # частые операции теперь реально трекятся через client_id в Transaction
+    def test_frequent_operations_tracked_via_transaction(self):
+        risk = RiskAnalyzer()
+        risk.register_account(self.acc_rub._id)
+        processor = TransactionProcessor(self.bank, risk_analyzer=risk)
+
+        # 3 транзакции с client_id — после 3-й должен сработать MEDIUM
+        for _ in range(3):
+            transaction = Transaction("deposit", 100, "RUB", receiver_id=self.acc_rub._id, client_id=self.client._id)
+            processor.process(transaction)
+
+        profile = risk.get_client_risk_profile(self.client._id)
+        self.assertEqual(profile["total_operations"], 3)
+        self.assertEqual(profile["risk"], RiskLevel.HIGH)
+
+    def test_transaction_without_client_id_still_works(self):
+        # обратная совместимость: без client_id транзакция работает нормально
+        transaction = Transaction("deposit", 500, "RUB", receiver_id=self.acc_rub._id)
+        self.processor.process(transaction)
+        self.assertEqual(transaction._status, "completed")
+
+    # мультивалютный баланс конвертируется в RUB
+    def test_total_balance_converts_currencies(self):
+        # acc_rub: 10000 RUB, acc_usd: 100 USD = 9000 RUB → итого 19000 RUB
+        total = self.bank.get_total_balance(self.client._id)
+        self.assertEqual(total, Decimal("19000"))  # 10000 + 100*90
+
+    def test_clients_ranking_uses_rub_equivalent(self):
+        client2 = Client("Богатый", "Долларовый", 35)
+        self.bank.add_client(client2)
+        acc = self.bank.open_account(client2._id, "basic", "USD")
+        acc.deposit(200)  # 200 USD = 18000 RUB < 19000 RUB у client1
+
+        ranking = self.bank.get_clients_ranking()
+        # client1: 10000 + 9000 = 19000 RUB
+        # client2: 18000 RUB
+        self.assertEqual(ranking[0][0]._id, self.client._id)
+
+    # невалидная сумма в Transaction бросает InvalidOperationError
+    def test_transaction_invalid_amount_string(self):
+        with self.assertRaises(InvalidOperationError): Transaction("deposit", "abc", "RUB")
+
+    def test_transaction_bool_amount_raises(self):
+        with self.assertRaises(InvalidOperationError): Transaction("deposit", True, "RUB")
+
+    def test_transaction_valid_amounts(self):
+        transaction_int = Transaction("deposit", 100,         "RUB")
+        transaction_float = Transaction("deposit", 99.5,        "RUB")
+        transaction_int_dec = Transaction("deposit", Decimal("50"), "RUB")
+        self.assertEqual(transaction_int._amount,   Decimal("100"))
+        self.assertEqual(transaction_float._amount, Decimal("99.5"))
+        self.assertEqual(transaction_int_dec._amount,   Decimal("50"))
 
 
 if __name__ == "__main__":
