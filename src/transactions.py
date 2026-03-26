@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from src.exceptions import InvalidOperationError, InsufficientFundsError
 from src.models import PremiumAccount
+from src.audit import AuditLog, RiskAnalyzer, LogLevel, RiskLevel
 
 
 # Модель транзакции: deposit / withdraw / transfer
@@ -95,9 +96,11 @@ class TransactionProcessor:
         ("EUR", "USD"): Decimal("1.08"),
     }
 
-    def __init__(self, bank):
+    def __init__(self, bank, audit_log: AuditLog = None, risk_analyzer: RiskAnalyzer = None):
         self._bank = bank
-        self._errors: list[str] = []  # лог ошибок
+        self._errors: list[str] = []
+        self._audit = audit_log
+        self._risk = risk_analyzer
 
     # Конвертация валюты по курсу
     def convert(self, amount: Decimal, from_cur: str, to_cur: str) -> Decimal:
@@ -112,14 +115,29 @@ class TransactionProcessor:
 
     # Обработать одну транзакцию с повторными попытками
     def process(self, transaction: Transaction):
+        # Проверка риска перед выполнением
+        if self._risk:
+            receiver_id = transaction._receiver_id
+            hour = self._bank._get_now().hour  # используем время банка (мокируемое в тестах)
+            risk = self._risk.analyze(transaction._amount, receiver_id=receiver_id, hour=hour)
+            if risk == RiskLevel.HIGH:
+                transaction.fail(f"Заблокировано: высокий риск")
+                if self._audit: self._audit.log(LogLevel.CRITICAL, f"Транзакция {transaction._id} заблокирована: высокий риск")
+                self._errors.append(f"{transaction._id}: заблокировано — высокий риск")
+                return
+            if risk == RiskLevel.MEDIUM and self._audit:
+                self._audit.log(LogLevel.WARNING, f"Транзакция {transaction._id}: средний риск ({transaction._amount})")
+
         for attempt in range(self.MAX_RETRIES):
             try:
                 self._execute(transaction)
+                if self._audit: self._audit.log(LogLevel.INFO, f"Транзакция {transaction._id} выполнена: {transaction._type} {transaction._amount}")
                 return  # успех — выходим
             except Exception as e:
                 if attempt == self.MAX_RETRIES - 1:
                     transaction.fail(str(e))
                     self._errors.append(f"{transaction._id}: {e}")
+                    if self._audit: self._audit.log(LogLevel.WARNING, f"Транзакция {transaction._id} провалена: {e}")
 
     # Логика выполнения транзакции
     def _execute(self, transaction: Transaction):

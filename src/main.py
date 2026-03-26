@@ -265,8 +265,8 @@ if __name__ == "__main__":
     transaction_queue.cancel(transaction_to_cancel._id)
 
     # 9-я — отложенная
-    deferred_tx = Transaction("deposit", 777, "RUB", receiver_id=account_alice._id)
-    transaction_queue.defer(deferred_tx)
+    deferred_transaction = Transaction("deposit", 777, "RUB", receiver_id=account_alice._id)
+    transaction_queue.defer(deferred_transaction)
 
     # 10-я — провальная (снятие с пустого)
     transaction_queue.add(Transaction("withdraw", 99999, "RUB", sender_id=account_bob._id))
@@ -276,14 +276,13 @@ if __name__ == "__main__":
     # Обработка
     print("\n--- Обработка очереди ---")
     transaction_processor.process_all(transaction_queue)
-
-    for tx in transaction_queue._queue: print(f"  {tx}")
+    for transaction in transaction_queue._queue: print(f"  {transaction}")
 
     # Выпускаем отложенную
     print("\n--- Отложенные ---")
     transaction_queue.release_deferred()
     transaction_processor.process_all(transaction_queue)
-    print(f"  {deferred_tx}")
+    print(f"  {deferred_transaction}")
 
     # Результаты
     print("\n--- Балансы ---")

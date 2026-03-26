@@ -31,7 +31,8 @@ oop-base/
 │   ├── test_bank_account_1.py
 │   ├── test_bank_account_2.py
 │   ├── test_bank_account_3.py
-│   └── test_bank_account_4.py
+│   ├── test_bank_account_4.py
+│   └── test_bank_account_5.py
 └── docs/
     └── description.md
 ```
@@ -50,6 +51,7 @@ python -m unittest tests.test_bank_account_1
 python -m unittest tests.test_bank_account_2
 python -m unittest tests.test_bank_account_3
 python -m unittest tests.test_bank_account_4
+python -m unittest tests.test_bank_account_5
 ```
 
 ## Классы

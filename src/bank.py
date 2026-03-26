@@ -9,6 +9,7 @@ from src.exceptions import (
     AuthenticationError, ClientBlockedError,
     NightOperationError, InvalidOperationError
 )
+from src.audit import AuditLog, RiskAnalyzer, LogLevel
 
 # Типы счетов — маппинг строки на класс
 ACCOUNT_TYPES = {
@@ -20,8 +21,7 @@ ACCOUNT_TYPES = {
 
 
 class Client:
-    """Клиент банка: ФИО, id, список счетов, контакты, аутентификация"""
-
+    # Клиент банка: ФИО, id, список счетов, контакты, аутентификация
     def __init__(self, first_name: str, last_name: str, age: int, phone: str = None, email: str = None, client_id: str = None):
         if age < 18: raise InvalidOperationError("Клиент должен быть старше 18 лет")
         self._id = client_id or uuid4().hex[:8]
@@ -53,22 +53,23 @@ class Client:
 
 
 class Bank:
-    """Управляющий класс банка: клиенты, счета, безопасность"""
-
+    # Управляющий класс банка: клиенты, счета, безопасность
     NIGHT_START = 0   # 00:00
     NIGHT_END = 5     # 05:00
     MAX_ATTEMPTS = 3
 
-    def __init__(self, name: str, time_provider=None):
+    def __init__(self, name: str, time_provider=None, audit_log: AuditLog = None, risk_analyzer: RiskAnalyzer = None):
         self._name = name
         self._clients: dict[str, Client] = {}     # client_id -> Client
         self._accounts: dict[str, BankAccount] = {}  # account_id -> BankAccount
         self._log: list[str] = []  # журнал действий
         # Инъекция зависимости: в тестах можно подменить на lambda: fake_datetime
         self._get_now = time_provider or datetime.now
+        self._audit = audit_log      # опциональный аудит
+        self._risk = risk_analyzer   # опциональный анализатор рисков
 
+    # Запрет операций с 00:00 до 05:00
     def _check_night(self):
-        """Запрет операций с 00:00 до 05:00"""
         hour = self._get_now().hour
         if self.NIGHT_START <= hour < self.NIGHT_END: raise NightOperationError("Операции запрещены с 00:00 до 05:00")
 
@@ -76,9 +77,8 @@ class Bank:
         timestamp = self._get_now().strftime("%Y-%m-%d %H:%M:%S")
         self._log.append(f"[{timestamp}] {action}")
 
-    # --- Клиенты ---
+    # Добавить клиента в банк
     def add_client(self, client: Client) -> Client:
-        """Добавить клиента в банк"""
         if client._id in self._clients: raise InvalidOperationError("Клиент уже зарегистрирован")
         self._clients[client._id] = client
         self._log_action(f"Добавлен клиент: {client.full_name} ({client._id})")
@@ -88,8 +88,7 @@ class Bank:
         if client_id not in self._clients: raise InvalidOperationError("Клиент не найден")
         return self._clients[client_id]
 
-    # --- Аутентификация ---
-
+    # Аутентификация
     def authenticate_client(self, client_id: str, pin: str) -> bool:
         """Аутентификация по PIN. 3 неудачи → блокировка"""
         client = self.get_client(client_id)
@@ -99,10 +98,12 @@ class Bank:
             client._failed_attempts += 1
             remaining = self.MAX_ATTEMPTS - client._failed_attempts
             self._log_action(f"Неудачная попытка входа: {client._id} (осталось: {remaining})")
+            if self._audit: self._audit.log(LogLevel.WARNING, f"Неверный PIN, осталось: {remaining}", client_id)
             if client._failed_attempts >= self.MAX_ATTEMPTS:
                 client._status = "blocked"
                 client._suspicious = True
                 self._log_action(f"Клиент заблокирован: {client._id}")
+                if self._audit: self._audit.log(LogLevel.CRITICAL, "Клиент заблокирован после 3 попыток", client_id)
                 raise ClientBlockedError("Клиент заблокирован после 3 неудачных попыток")
             raise AuthenticationError(f"Неверный PIN. Осталось попыток: {remaining}")
 
@@ -110,14 +111,12 @@ class Bank:
         self._log_action(f"Успешная аутентификация: {client._id}")
         return True
 
-    # --- Счета ---
-
+    # Счета
     def open_account(self, client_id: str, account_type: str = "basic", currency: str = "RUB", **kwargs) -> BankAccount:
         """Открыть счёт для клиента"""
         self._check_night()
         client = self.get_client(client_id)
         if client._status == "blocked": raise ClientBlockedError("Клиент заблокирован")
-
         if account_type not in ACCOUNT_TYPES: raise InvalidOperationError(f"Тип счёта '{account_type}' не поддерживается")
 
         # Owner создаётся из Client для совместимости с BankAccount
@@ -128,10 +127,12 @@ class Bank:
         self._accounts[account._id] = account
         client.add_account(account._id)
         self._log_action(f"Открыт счёт {account_type}: {account._id} для клиента {client._id}")
+        if self._audit: self._audit.log(LogLevel.INFO, f"Открыт счёт {account_type}: {account._id}", client_id)
+        if self._risk: self._risk.register_account(account._id)
         return account
 
+    # Закрыть счёт: проверяет нулевой баланс, удаляет из реестров
     def close_account(self, client_id: str, account_id: str):
-        """Закрыть счёт: проверяет нулевой баланс, удаляет из реестров"""
         self._check_night()
         client = self.get_client(client_id)
         account = self._get_account(account_id)
@@ -143,23 +144,21 @@ class Bank:
         del self._accounts[account_id]
         self._log_action(f"Закрыт счёт: {account_id} клиента {client._id}")
 
+    # Заморозить счёт
     def freeze_account(self, client_id: str, account_id: str):
-        """Заморозить счёт"""
         self._check_night()
         client = self.get_client(client_id)
         account = self._get_account(account_id)
         if account_id not in client._accounts: raise InvalidOperationError("Счёт не принадлежит клиенту")
-
         account.freeze()
         self._log_action(f"Заморожен счёт: {account_id} клиента {client._id}")
 
+    # Разморозить счёт
     def unfreeze_account(self, client_id: str, account_id: str):
-        """Разморозить счёт"""
         self._check_night()
         client = self.get_client(client_id)
         account = self._get_account(account_id)
         if account_id not in client._accounts: raise InvalidOperationError("Счёт не принадлежит клиенту")
-
         account.active()
         self._log_action(f"Разморожен счёт: {account_id} клиента {client._id}")
 
@@ -167,18 +166,14 @@ class Bank:
         if account_id not in self._accounts: raise InvalidOperationError("Счёт не найден")
         return self._accounts[account_id]
 
-    # --- Поиск ---
+    # Поиск счетов по фильтрам
     def search_accounts(self, client_id: str = None, currency: str = None, status: str = None, account_type: str = None) -> list[BankAccount]:
-        """Поиск счетов по фильтрам"""
         results = list(self._accounts.values())
-
         if client_id:
             client = self.get_client(client_id)
             results = [a for a in results if a._id in client._accounts]
-        if currency:
-            results = [a for a in results if a._currency == currency]
-        if status:
-            results = [a for a in results if a._status == status]
+        if currency:  results = [a for a in results if a._currency == currency]
+        if status: results = [a for a in results if a._status == status]
         if account_type:
             cls = ACCOUNT_TYPES.get(account_type)
             if cls: results = [a for a in results if type(a) is cls]
@@ -187,7 +182,7 @@ class Bank:
 
     # --- Аналитика ---
     def get_total_balance(self, client_id: str = None) -> Decimal:
-        """Суммарный баланс: по клиенту или всего банка"""
+        #  Суммарный баланс: по клиенту или всего банка
         if client_id:
             client = self.get_client(client_id)
             accounts = [self._accounts[aid] for aid in client._accounts if aid in self._accounts]
@@ -195,7 +190,7 @@ class Bank:
         return sum((a._balance for a in accounts), Decimal("0"))
 
     def get_clients_ranking(self) -> list[tuple[Client, Decimal]]:
-        """Рейтинг клиентов по суммарному балансу (от большего к меньшему)"""
+        #  Рейтинг клиентов по суммарному балансу (от большего к меньшему)
         ranking = []
         for client in self._clients.values():
             total = sum( (self._accounts[aid]._balance for aid in client._accounts if aid in self._accounts), Decimal("0"))
